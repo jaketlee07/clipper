@@ -1,0 +1,9 @@
+{
+  "name": "Example Streamer",
+  "twitch": "example",
+  "layout": "stacked",
+  "facecam": { "x": 1500, "y": 40, "w": 380, "h": 290 },
+  "game": { "x": 0, "y": 0, "w": 1920, "h": 1080 },
+  "sourceSize": { "w": 1920, "h": 1080 },
+  "notes": "Find the facecam box with: npm run frame -- <vod file> --at 10:00. The still has a grid every 100 px. Boxes are in pixels of sourceSize and are scaled if the VOD is another size. Use \"layout\": \"full\" for streams with no facecam."
+}
