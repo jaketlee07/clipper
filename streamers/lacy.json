@@ -1,0 +1,10 @@
+{
+  "name": "LACY",
+  "twitch": "lacy",
+  "layout": "stacked",
+  "facecam": { "x": 0, "y": 0, "w": 494, "h": 278 },
+  "game": { "x": 500, "y": 0, "w": 860, "h": 1080 },
+  "sourceSize": { "w": 1920, "h": 1080 },
+  "irl": { "game": { "x": 0, "y": 0, "w": 1920, "h": 1080 } },
+  "notes": "Measured on the GTA 6 marathon VODs (v2932194507 at 10:00:00, v2933767012 at 3:00:00); same layout in both. Facecam is top-left. The overlay has chat top-right (from x≈1370), Twitch/YouTube viewer-count icons bottom-left and a sub goal bottom-right; the game box crops all three out, since the campaign bans logos. IRL footage (found by the frame check) uses the full-frame layout with the irl box instead; its middle crop also misses the overlay. Re-measure if he changes overlay."
+}

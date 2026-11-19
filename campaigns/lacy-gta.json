@@ -1,0 +1,26 @@
+{
+  "name": "LACY GTA VI Marathon (Reach, $12.5K pool)",
+  "streamer": "lacy",
+  "submitUrl": "https://contentrewards.com/c/campaigns/a5c63fad-cd53-4b81-9305-4a2d1696872a",
+  "rulesUrl": "https://reachclipping.com/LACYGTA",
+  "platforms": ["tiktok", "youtube", "instagram", "x"],
+  "minSeconds": 15,
+  "maxSeconds": 60,
+  "clipsPerVod": 6,
+  "hashtags": ["#LACY", "#gta6"],
+  "mentions": [],
+  "captionMustInclude": ["LACY"],
+  "bannedWords": ["exposed", "cancelled", "canceled", "fraud", "scammer", "fake fan", "flop", "fell off"],
+  "disclosure": {
+    "caption": "",
+    "onScreen": ""
+  },
+  "credit": "LACY · twitch.tv/lacy",
+  "censorCaptions": true,
+  "censorWords": [],
+  "visualRules": [
+    "Logos of any kind are not allowed: no console, app, store, brand, game-tile or radio-station logos, and no watermarks. GTA 6's own world (signs, cars, storefronts) is fine.",
+    "Lacy must be the primary focus: footage that is mostly someone else's stream or video doesn't count."
+  ],
+  "notes": "Source: Lacy's GTA 6 marathon (from Nov 18, 2026). Lacy must be the primary focus of every clip: his reaction, his voice or his gameplay carries the moment, not chat, a guest or another streamer. Never portray Lacy in a negative light, never hate-farm, never imply drama or a false story; hooks must be positive or neutral and true to what happens. Prefer GTA 6 moments: first reactions to the game, chases, crashes, funny NPC moments, giveaway moments, big laughs. English only. The hook and caption must name LACY."
+}
