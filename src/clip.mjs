@@ -159,7 +159,8 @@ async function checkFrames(job, picks, { campaign, streamer, count, wordsIn }) {
       console.log(`  Kept ${label}${r.irl ? " (IRL: full-frame layout)" : ""}${r.trimmed ? `, ${r.trimmed}` : ""}${r.failed ? ` (check failed: ${r.failed})` : ""}`);
     }
   }
-  if (kept.length < count) console.log(`  ${kept.length} of ${count} clips passed; the rest of the picks didn't.`);
+  if (!picks.length) console.log("  Nothing to check: no moment here was worth posting for this campaign.");
+  else if (kept.length < count) console.log(`  ${kept.length} of ${count} clips passed; the rest of the picks didn't.`);
   return { kept, dropped };
 }
 
