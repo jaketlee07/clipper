@@ -1,0 +1,26 @@
+{
+  "name": "clipper",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "clip": "node src/clip.mjs",
+    "posted": "node src/posted.mjs",
+    "frame": "node src/frame.mjs",
+    "check": "node scripts/check-setup.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.136.0",
+    "@remotion/bundler": "4.0.537",
+    "@remotion/cli": "4.0.537",
+    "@remotion/media": "4.0.537",
+    "@remotion/renderer": "4.0.537",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "remotion": "4.0.537",
+    "zod": "^4.6.7"
+  }
+}

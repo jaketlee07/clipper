@@ -1,0 +1,19 @@
+{
+  "name": "Example campaign (copy this file and fill it in from the brief)",
+  "streamer": "example",
+  "submitUrl": "https://whop.com/",
+  "platforms": ["tiktok", "youtube", "instagram"],
+  "minSeconds": 15,
+  "maxSeconds": 60,
+  "clipsPerVod": 5,
+  "hashtags": ["#gta6"],
+  "mentions": [],
+  "captionMustInclude": [],
+  "bannedWords": [],
+  "disclosure": {
+    "caption": "",
+    "onScreen": ""
+  },
+  "credit": "twitch.tv/example",
+  "notes": "Anything else from the brief Claude should respect when picking moments, e.g. 'no clips of other streamers', 'game footage must be visible'."
+}

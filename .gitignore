@@ -1,0 +1,11 @@
+# Secrets: never commit
+.env
+.env.*
+!.env.example
+
+# Jobs: downloaded VODs, renders, logs (large, regenerable)
+media/
+
+node_modules/
+npm-debug.log*
+.DS_Store
