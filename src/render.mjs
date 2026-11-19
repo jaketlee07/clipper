@@ -1,14 +1,16 @@
 // Render: cuts each picked clip from the source with ffmpeg, then lays it out at
 // 1080x1920 in Remotion (remotion/Clip.jsx): facecam over gameplay (or a blurred
-// fill when there's no facecam), word-by-word captions, a 2-second hook title, the
-// streamer credit and the campaign's on-screen disclosure.
+// fill when there's no facecam, or the clip is IRL footage), word-by-word
+// captions, a 2-second hook title, the streamer credit and the campaign's
+// on-screen disclosure.
 import { cpSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bundle } from "@remotion/bundler";
 import { renderMedia, selectComposition } from "@remotion/renderer";
-import { scaleBoxes } from "./config.mjs";
+import { censorFor } from "./censor.mjs";
 import { loadEnv } from "./env.mjs";
+import { layoutsFor } from "./screen.mjs";
 import { ffmpeg } from "./util.mjs";
 
 const FPS = 30;
@@ -57,8 +59,8 @@ export async function renderClips(job, clips, { campaign, streamer, onEach } = {
 
   const env = loadEnv();
   const browserExecutable = env.BROWSER_EXECUTABLE || null;
-  const boxes = scaleBoxes(streamer, job.width, job.height);
-  const layout = streamer.layout === "stacked" && boxes.facecam ? "stacked" : "full";
+  const looks = layoutsFor(streamer, job.width, job.height);
+  const censor = censorFor(campaign);
   const credit = campaign.credit || (streamer.twitch ? `twitch.tv/${streamer.twitch}` : "");
   const disclosure = campaign.disclosure.onScreen || "";
 
@@ -67,16 +69,18 @@ export async function renderClips(job, clips, { campaign, streamer, onEach } = {
   try {
     for (const clip of clips) {
       const duration = clip.end - clip.start;
+      const look = clip.irl ? looks.irl : looks.stream;
+      const words = (clip.words ?? []).map((w) => ({ ...w, text: censor(w.text) }));
       const props = {
         fps: FPS,
         duration,
         src: clip.cutFile,
         srcW: job.width,
         srcH: job.height,
-        layout,
-        facecam: boxes.facecam ?? null,
-        game: boxes.game,
-        captions: captionLines(clip.words ?? [], clip.start, duration),
+        layout: look.layout,
+        facecam: look.facecam ?? null,
+        game: look.game,
+        captions: captionLines(words, clip.start, duration),
         hook: clip.hook ?? "",
         credit,
         disclosure,
@@ -87,7 +91,7 @@ export async function renderClips(job, clips, { campaign, streamer, onEach } = {
       await renderMedia({ composition, serveUrl, codec: "h264", crf: 23, outputLocation, inputProps: props, browserExecutable });
       clip.video = outputLocation;
       clip.bytes = statSync(outputLocation).size;
-      clip.layout = layout;
+      clip.layout = look.layout;
       clip.credit = credit;
       clip.onScreenDisclosure = disclosure;
       onEach?.(clip, Math.round((Date.now() - started) / 1000));

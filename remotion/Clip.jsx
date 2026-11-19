@@ -1,10 +1,8 @@
 import { Video } from "@remotion/media";
 import { AbsoluteFill, interpolate, spring, staticFile, useCurrentFrame, useVideoConfig } from "remotion";
 import { Captions } from "./Captions.jsx";
+import { FULL_H, H, W, facecamHeight } from "./layout.js";
 import { SAFE, colors, font } from "./theme.js";
-
-const W = 1080;
-const H = 1920;
 
 // Shows the `rect` part of the source video filling a band of bandW x bandH,
 // cropping whatever doesn't fit. `zoom` pushes in around the middle.
@@ -49,7 +47,7 @@ export function Clip({ src, srcW, srcH, layout, facecam, game, captions, hook, c
 
   if (layout === "stacked" && facecam) {
     // Facecam on top, at its own shape (within limits), gameplay below.
-    const faceH = Math.round(Math.min(860, Math.max(560, (W * facecam.h) / facecam.w)));
+    const faceH = facecamHeight(facecam);
     const gameH = H - faceH;
     return (
       <AbsoluteFill style={{ background: "#000" }}>
@@ -65,7 +63,7 @@ export function Clip({ src, srcW, srcH, layout, facecam, game, captions, hook, c
   }
 
   // No facecam: blurred fill behind a 4:5 crop of the gameplay.
-  const fgH = 1350;
+  const fgH = FULL_H;
   const fgTop = Math.round((H - fgH) / 2) - 60;
   return (
     <AbsoluteFill style={{ background: "#000" }}>

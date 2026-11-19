@@ -65,6 +65,17 @@ export function fitCut(c, start, end, campaign) {
   return { start: Math.round(s * 100) / 100, end: Math.round(e * 100) / 100 };
 }
 
+// The brief's notes, plus the rules the pick should already steer around.
+function briefNotes(campaign) {
+  const notes = [campaign.notes];
+  if (campaign.censorCaptions) notes.push("Hooks and captions must not swear.");
+  if (campaign.visualRules.length) notes.push(`On-screen rules (a frame check enforces these after you pick): ${campaign.visualRules.join(" ")}`);
+  return notes.filter(Boolean).join(" ") || "none";
+}
+
+// Returns every clip Claude thinks is worth posting, best first (the frame check
+// may drop some, so the caller takes the first `count` that pass). Without
+// Claude, the top `count` by signal score.
 export async function pickClips(list, { campaign, streamer, count }) {
   if (!list.length) return { clips: [], how: "no candidates" };
   if (!claudeConfigured()) {
@@ -84,7 +95,7 @@ export async function pickClips(list, { campaign, streamer, count }) {
       platforms: campaign.platforms.join(", "),
       minSeconds: String(campaign.minSeconds),
       maxSeconds: String(campaign.maxSeconds),
-      notes: campaign.notes || "none",
+      notes: briefNotes(campaign),
       count: String(list.length),
       candidates: list.map(describe).join("\n\n"),
     }),
@@ -98,5 +109,5 @@ export async function pickClips(list, { campaign, streamer, count }) {
     clips.push({ ...p, ...fitCut(c, p.start, p.end, campaign), hook: p.hook.trim(), caption: p.caption.trim(), signals: c.parts });
   }
   clips.sort((a, b) => b.score - a.score);
-  return { clips: clips.slice(0, count), how: "ranked by Claude" };
+  return { clips, how: "ranked by Claude" };
 }

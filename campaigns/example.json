@@ -15,5 +15,8 @@
     "onScreen": ""
   },
   "credit": "twitch.tv/example",
+  "censorCaptions": false,
+  "censorWords": [],
+  "visualRules": ["Rules from the brief about what may be on screen, one per line, e.g. 'No logos of any kind' or 'No other streamers' faces'."],
   "notes": "Anything else from the brief Claude should respect when picking moments, e.g. 'no clips of other streamers', 'game footage must be visible'."
 }

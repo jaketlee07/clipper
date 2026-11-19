@@ -1,6 +1,8 @@
 // Lint: checks each clip against its campaign's rules before anyone posts it, and
 // fixes what can be fixed safely (adding the required hashtags, mentions and
-// disclosure to the caption). Errors mean "don't post this as is".
+// disclosure to the caption, starring out swearing). Errors mean "don't post
+// this as is".
+import { censorFor } from "./censor.mjs";
 
 const words = (text) => text.toLowerCase();
 
@@ -11,7 +13,7 @@ export function finalCaption(clip, campaign) {
   for (const m of campaign.mentions) if (!body().includes(words(m))) parts.push(m);
   if (campaign.disclosure.caption && !body().includes(words(campaign.disclosure.caption))) parts.push(campaign.disclosure.caption);
   const tags = campaign.hashtags.filter((t) => !body().includes(words(t)));
-  return [...parts, ...tags].join(" ").replace(/\s+/g, " ").trim();
+  return censorFor(campaign)([...parts, ...tags].join(" ").replace(/\s+/g, " ").trim());
 }
 
 export function lintClip(clip, campaign) {
@@ -44,6 +46,7 @@ export function lintClip(clip, campaign) {
   if (!clip.hook) warnings.push("no hook title");
   else if (clip.hook.split(/\s+/).length > 8) warnings.push("hook is longer than 8 words");
   if (!(clip.words ?? []).length) warnings.push("no captions (no speech found, or Whisper is off)");
+  for (const note of clip.checkNotes ?? []) warnings.push(note);
 
   return { ok: errors.length === 0, errors, warnings, caption };
 }

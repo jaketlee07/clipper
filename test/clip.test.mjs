@@ -75,3 +75,46 @@ test("args and times", () => {
   assert.deepEqual(positional, ["vod.mp4"]);
   assert.deepEqual(flags, { campaign: "tomo", render: false, from: "10:00" });
 });
+
+test("censor stars swearing only for campaigns that ask, and leaves look-alikes", async () => {
+  const { censorFor } = await import("../src/censor.mjs");
+  const on = censorFor({ censorCaptions: true, censorWords: ["crap"] });
+  assert.equal(on("SHIT and I, what the fuckin' hell"), "SH*T and I, what the f*ckin' hell");
+  assert.equal(on("motherfucker bullshit dumbass asshole crap!"), "motherf*cker bullsh*t dumba** a**hole c**p!");
+  assert.equal(on("peacock cocktail Dickens shitake"), "peacock cocktail Dickens shitake");
+  assert.equal(censorFor({ censorCaptions: false })("shit"), "shit");
+  const caption = finalCaption({ caption: "LACY lost his shit" }, { ...campaign, censorCaptions: true, censorWords: [] });
+  assert.ok(caption.startsWith("LACY lost his sh*t"));
+});
+
+test("frame check keeps the longest usable run and trims menus off the ends", async () => {
+  const { cleanCut, snapInward } = await import("../src/screen.mjs");
+  const clip = { start: 100, end: 140 };
+  const f = (t, scene, problem = "") => ({ t, scene, problem });
+  // Menu for the first 6 s, then gameplay to the end.
+  const frames = [f(101, "menu"), f(103, "menu"), f(105, "menu", "radio station logos"), ...[107, 109, 111, 113, 115, 117, 119, 121, 123, 125, 127, 129, 131, 133, 135, 137, 139].map((t) => f(t, "stream"))];
+  const cut = cleanCut(clip, frames, { minSeconds: 15 });
+  assert.equal(cut.keep, true);
+  assert.equal(cut.start, 106);
+  assert.equal(cut.end, 140);
+  assert.equal(cut.irl, false);
+  assert.match(cut.trimmed, /6 s at the start/);
+  // All IRL: kept whole, flagged for the full-frame layout.
+  const irl = cleanCut(clip, [101, 103, 105, 107, 109, 111, 113, 115, 117, 119].map((t) => f(t, "irl")), { minSeconds: 15 });
+  assert.deepEqual([irl.start, irl.end, irl.irl, irl.trimmed], [100, 140, true, ""]);
+  // Too little usable footage left: dropped.
+  const short = cleanCut(clip, [f(101, "stream"), f(103, "stream"), f(105, "black"), f(107, "menu")], { minSeconds: 15 });
+  assert.equal(short.keep, false);
+  // Trimmed edges move inward off a word rather than cutting it in half.
+  assert.deepEqual(snapInward(106, 140, [{ start: 105.5, end: 106.4 }, { start: 139.8, end: 140.3 }]), { start: 106.45, end: 139.75 });
+});
+
+test("the frame check and the template agree on what's on screen", async () => {
+  const { visibleRegions } = await import("../remotion/layout.js");
+  const [face, game] = visibleRegions("stacked", { facecam: { x: 0, y: 0, w: 494, h: 278 }, game: { x: 500, y: 0, w: 860, h: 1080 } });
+  assert.ok(Math.abs(face.x) < 1 && Math.abs(face.w - 494) < 1 && face.h === 278);
+  // Lacy's gameplay band shows x 500 to 1360 of the source, so his chat (from x 1370) is cropped out.
+  assert.ok(game.x >= 500 && game.x + game.w <= 1360);
+  const [full] = visibleRegions("full", { game: { x: 0, y: 0, w: 1920, h: 1080 } });
+  assert.equal(Math.round(full.w), 864);
+});
