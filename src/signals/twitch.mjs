@@ -5,7 +5,7 @@ import { loadEnv } from "../env.mjs";
 
 let token = null;
 
-async function helix(path, params) {
+async function helix(path, params, retry = true) {
   const env = loadEnv();
   if (!env.TWITCH_CLIENT_ID || !env.TWITCH_CLIENT_SECRET) throw new Error("TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET aren't set.");
   if (!token) {
@@ -17,8 +17,13 @@ async function helix(path, params) {
     token = (await res.json()).access_token;
   }
   const url = new URL(`https://api.twitch.tv/helix/${path}`);
-  for (const [k, v] of Object.entries(params)) if (v !== undefined) url.searchParams.set(k, v);
+  for (const [k, v] of Object.entries(params)) for (const one of [v].flat()) if (one !== undefined) url.searchParams.append(k, one);
   const res = await fetch(url, { headers: { "Client-Id": env.TWITCH_CLIENT_ID, Authorization: `Bearer ${token}` } });
+  // The sign-in token expires after a few weeks, which a long-running bot outlives.
+  if (res.status === 401 && retry) {
+    token = null;
+    return helix(path, params, false);
+  }
   if (!res.ok) throw new Error(`Twitch API ${path} returned HTTP ${res.status}.`);
   return res.json();
 }
@@ -56,4 +61,29 @@ export async function vodClips(meta) {
     if (!cursor) break;
   }
   return clips;
+}
+
+// A streamer's newest past broadcasts, newest first. While they're live, the
+// broadcast in progress is listed too (live: true) and its duration keeps growing.
+export async function recentVods(login, count = 5) {
+  const { data: users } = await helix("users", { login });
+  if (!users[0]) throw new Error(`There's no Twitch user called "${login}".`);
+  const [{ data: videos }, { data: streams }] = await Promise.all([
+    helix("videos", { user_id: users[0].id, type: "archive", first: count }),
+    helix("streams", { user_id: users[0].id }),
+  ]);
+  const live = streams[0] ?? null;
+  const isLive = (v) =>
+    Boolean(live) && (v.stream_id ? v.stream_id === live.id : Math.abs(new Date(v.created_at) - new Date(live.started_at)) < 10 * 60 * 1000);
+  return videos.map((v) => ({ id: v.id, streamId: v.stream_id ?? null, title: v.title, createdAt: v.created_at, duration: helixDuration(v.duration), live: isLive(v) }));
+}
+
+// Which of these streamers are live now: Map of login -> { id, title, game, startedAt, viewers }.
+export async function liveStreams(logins) {
+  const live = new Map();
+  for (let i = 0; i < logins.length; i += 100) {
+    const { data } = await helix("streams", { user_login: logins.slice(i, i + 100), type: "live" });
+    for (const s of data) live.set(s.user_login.toLowerCase(), { id: s.id, name: s.user_name, title: s.title, game: s.game_name, startedAt: s.started_at, viewers: s.viewer_count });
+  }
+  return live;
 }

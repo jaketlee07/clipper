@@ -118,3 +118,49 @@ test("the frame check and the template agree on what's on screen", async () => {
   const [full] = visibleRegions("full", { game: { x: 0, y: 0, w: 1920, h: 1080 } });
   assert.equal(Math.round(full.w), 864);
 });
+
+test("follow takes full chunks of a live VOD, overlapping a little, and the tail of a finished one", async () => {
+  const { nextChunk } = await import("../src/follow.mjs");
+  const opts = { chunk: 1800, minSeconds: 15 };
+  // Live at 1:00:00: the VOD runs 3 minutes behind, so only one full chunk from 0 is ready.
+  assert.deepEqual(nextChunk({ live: true, duration: 3600 }, 0, opts), { from: 0, to: 1800 });
+  assert.equal(nextChunk({ live: true, duration: 3600 }, 1800, opts), null);
+  // Later chunks start a minute early, so a moment on the boundary isn't cut.
+  assert.deepEqual(nextChunk({ live: true, duration: 5600 }, 1800, opts), { from: 1740, to: 3600 });
+  // Once the broadcast is over, the last stretch is taken even if it's short.
+  assert.deepEqual(nextChunk({ live: false, duration: 4000 }, 3600, opts), { from: 3540, to: 4000 });
+  assert.equal(nextChunk({ live: false, duration: 3610 }, 3600, opts), null);
+});
+
+test("following starts at most the backlog back into the live broadcast, and leaves old ones alone", async () => {
+  const { startState, isRecordingOf } = await import("../src/follow.mjs");
+  assert.deepEqual(startState({ live: true, duration: 3 * 3600 }, undefined, 3600), { done: 2 * 3600 });
+  // Stopped two hours ago: picks up an hour back, not where it stopped.
+  assert.deepEqual(startState({ live: true, duration: 5 * 3600 }, { done: 3 * 3600 }, 3600), { done: 4 * 3600 });
+  // Stopped ten minutes ago: picks up where it stopped.
+  assert.deepEqual(startState({ live: true, duration: 5 * 3600 }, { done: 5 * 3600 - 600 }, 3600), { done: 5 * 3600 - 600 });
+  // A broadcast that was being followed finishes its tail; one that wasn't is skipped.
+  assert.deepEqual(startState({ live: false, duration: 7200 }, { done: 6000 }, 3600), { done: 6000 });
+  assert.equal(startState({ live: false, duration: 7200 }, undefined, 3600).finished, true);
+  assert.equal(isRecordingOf({ streamId: "42" }, { id: "42" }), true);
+  assert.equal(isRecordingOf({ streamId: "41" }, { id: "42" }), false);
+  assert.equal(isRecordingOf({ streamId: null, createdAt: "2026-11-20T10:01:00Z" }, { id: "42", startedAt: "2026-11-20T10:00:00Z" }), true);
+});
+
+test("the bot's message offers the right buttons for each stage", async () => {
+  const { view } = await import("../src/bot.mjs");
+  const rec = { id: "s1", name: "LACY", title: "GTA 6 MARATHON", game: "Grand Theft Auto VI" };
+  const camp = { id: "lacy-gta", name: "LACY GTA VI" };
+  const ids = (v) => v.buttons.map((b) => b[0].split("|")[0]);
+  const asked = view(rec, camp, { status: "asked" }, { owner: "99", live: true });
+  assert.match(asked.content, /LACY is live.*GTA 6 MARATHON \(Grand Theft Auto VI\)[\s\S]*<@99>/);
+  assert.deepEqual(ids(asked), ["start", "skip"]);
+  assert.equal(asked.buttons[0][0], "start|s1|lacy-gta");
+  const following = view(rec, camp, { status: "following", since: "2026-11-20T10:00:00Z", chunks: 2, clips: 5, now: "1:00:00 to 1:30:00" }, { live: true });
+  assert.match(following.content, /2 chunks done, 5 clips so far.*Now clipping 1:00:00 to 1:30:00/);
+  assert.deepEqual(ids(following), ["stop"]);
+  assert.deepEqual(ids(view(rec, camp, { status: "stopped", stoppedAt: "2026-11-20T11:00:00Z" }, { live: true })), ["start"]);
+  assert.deepEqual(ids(view(rec, camp, { status: "stopped", stoppedAt: "2026-11-20T11:00:00Z" }, { live: false })), []);
+  assert.deepEqual(ids(view(rec, camp, { status: "ended" }, { live: false })), []);
+  assert.match(view(rec, camp, { status: "done", chunks: 1, clips: 1 }, { live: false }).content, /1 chunk done, 1 clip\./);
+});

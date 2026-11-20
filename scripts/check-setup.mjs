@@ -26,6 +26,11 @@ for (const [key, label] of [["DISCORD_WEBHOOK_URL", "Discord #clips-ready webhoo
   row(res.ok, label, res.ok ? `posts to channel ${(await res.json()).channel_id}` : `HTTP ${res.status}`);
 }
 
+if (env.DISCORD_BOT_TOKEN) {
+  const res = await fetch("https://discord.com/api/v10/users/@me", { headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}` } });
+  row(res.ok, "Discord bot", res.ok ? `logged in as ${(await res.json()).username}` : `HTTP ${res.status}: check DISCORD_BOT_TOKEN`);
+} else row(null, "Discord bot", "not set: no live pings with Clip it buttons (npm run bot)");
+
 if (env.TWITCH_CLIENT_ID && env.TWITCH_CLIENT_SECRET) {
   const res = await fetch("https://id.twitch.tv/oauth2/token", {
     method: "POST",

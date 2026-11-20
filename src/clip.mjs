@@ -8,11 +8,12 @@
 //   --from 1:00:00 --to 3:00:00   only this part of the VOD
 //   --count 5             clips to make (default: the campaign's clipsPerVod)
 //   --candidates 12       moments to transcribe and rank
+//   --repeat              allow moments this campaign already has a clip of (skipped by default)
 //   --no-screen           skip the frame check (menus, black screens, on-screen rules, IRL layout)
 //   --no-render           stop after ranking (writes clips.json only)
 //   --no-discord          don't ping Discord
 //   --allow-youtube       allow a YouTube link (only with rights to download it)
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { censorFor } from "./censor.mjs";
 import { claudeConfigured, totalSpent } from "./claude.mjs";
@@ -30,7 +31,7 @@ import { vodClips } from "./signals/twitch.mjs";
 import { transcribeCandidates } from "./transcript.mjs";
 import { MEDIA, clock, parseArgs, parseClock, slugify } from "./util.mjs";
 
-const { flags, positional } = parseArgs(process.argv.slice(2), ["render", "discord", "screen", "allow-youtube"]);
+const { flags, positional } = parseArgs(process.argv.slice(2), ["render", "discord", "screen", "repeat", "allow-youtube"]);
 
 async function main() {
   const input = positional[0];
@@ -71,6 +72,12 @@ async function main() {
   console.log(`4/7 Ranking and writing hooks`);
   const picked = await pickClips(list, { campaign, streamer, count });
   console.log(`  ${picked.clips.length} worth posting, ${picked.how}`);
+  if (flags.repeat !== true) {
+    const made = alreadyClipped(campaign.id, job.vodId);
+    const before = picked.clips.length;
+    picked.clips = picked.clips.filter((p) => !made.some((m) => job.offset + p.start < m.to && job.offset + p.end > m.from));
+    if (picked.clips.length < before) console.log(`  Skipped ${before - picked.clips.length} already clipped for this campaign (--repeat to allow)`);
+  }
   const byId = new Map(list.map((c) => [c.id, c]));
   const wordsIn = (p) => (byId.get(p.candidate).words ?? []).filter((w) => w.end > p.start && w.start < p.end);
 
@@ -98,7 +105,7 @@ async function main() {
   const summary = out.map(({ words, ...c }) => ({ ...c, vodTime: job.offset + c.start, captionWords: words.length }));
   writeFileSync(join(job.dir, "clips.json"), `${JSON.stringify({ input, campaign: campaign.id, streamer: streamer.id ?? null, how: picked.how, clips: summary, dropped }, null, 2)}\n`);
   // One line per clip for the learning loop: which signals and hooks led to views.
-  for (const c of summary) appendFileSync(`${MEDIA}clips.jsonl`, `${JSON.stringify({ at: new Date().toISOString(), job: job.slug, campaign: campaign.id, rank: c.rank, file: c.file, hook: c.hook, score: c.score, seconds: c.end - c.start, vodTime: c.vodTime, signals: c.signals, ok: c.lint.ok })}\n`);
+  for (const c of summary) appendFileSync(`${MEDIA}clips.jsonl`, `${JSON.stringify({ at: new Date().toISOString(), job: job.slug, vod: job.vodId ?? null, rendered: Boolean(c.video), campaign: campaign.id, rank: c.rank, file: c.file, hook: c.hook, score: c.score, seconds: c.end - c.start, vodTime: c.vodTime, signals: c.signals, ok: c.lint.ok })}\n`);
 
   console.log(`7/7 Notifying`);
   if (flags.discord === false) console.log("  Discord skipped");
@@ -116,6 +123,24 @@ async function main() {
     for (const w of c.lint.warnings) console.log(`        ⚠ ${w}`);
   }
   if (out.some((c) => c.video)) console.log(`  Clips: media/${job.slug}/clips/`);
+}
+
+// Stretches of this VOD already clipped for this campaign (an earlier run, or the
+// overlap between follow chunks), so the same moment isn't made, and posted,
+// twice: Reach counts reposts as manipulation.
+function alreadyClipped(campaignId, vodId) {
+  const log = `${MEDIA}clips.jsonl`;
+  if (!vodId || !existsSync(log)) return [];
+  const rows = readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => {
+    try {
+      return JSON.parse(line);
+    } catch {
+      return null;
+    }
+  });
+  return rows
+    .filter((c) => c && c.campaign === campaignId && c.rendered !== false && (c.vod ?? c.job?.match(/^twitch-(\d+)/)?.[1]) === vodId)
+    .map((c) => ({ from: c.vodTime, to: c.vodTime + c.seconds }));
 }
 
 // Checks picks in rank order, a batch at a time, until `count` pass: trims menus,
