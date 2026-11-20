@@ -21,6 +21,12 @@ const CAMPAIGN_DEFAULTS = {
   disclosure: { caption: "", onScreen: "" },
   credit: "",
   notes: "",
+  // Star out swearing in captions, the hook and the post caption.
+  censorCaptions: false,
+  censorWords: [],
+  // The brief's rules about what may appear on screen, in plain words (e.g. "No
+  // logos of any kind"). The frame check trims or drops footage that breaks them.
+  visualRules: [],
 };
 
 export function loadCampaign(name) {

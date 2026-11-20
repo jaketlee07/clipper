@@ -8,18 +8,22 @@
 //   --from 1:00:00 --to 3:00:00   only this part of the VOD
 //   --count 5             clips to make (default: the campaign's clipsPerVod)
 //   --candidates 12       moments to transcribe and rank
+//   --repeat              allow moments this campaign already has a clip of (skipped by default)
+//   --no-screen           skip the frame check (menus, black screens, on-screen rules, IRL layout)
 //   --no-render           stop after ranking (writes clips.json only)
 //   --no-discord          don't ping Discord
 //   --allow-youtube       allow a YouTube link (only with rights to download it)
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { totalSpent } from "./claude.mjs";
+import { censorFor } from "./censor.mjs";
+import { claudeConfigured, totalSpent } from "./claude.mjs";
 import { loadCampaign, loadStreamer } from "./config.mjs";
 import { discordConfigured, notifyClipsReady } from "./discord.mjs";
 import { ingest } from "./ingest.mjs";
 import { lintClip } from "./lint.mjs";
-import { pickClips } from "./pick.mjs";
+import { pickClips, rehook } from "./pick.mjs";
 import { renderClips } from "./render.mjs";
+import { screenClip, snapInward } from "./screen.mjs";
 import { chatBuckets, readChat } from "./signals/chat.mjs";
 import { loudness } from "./signals/loudness.mjs";
 import { candidates, scoreBuckets } from "./signals/score.mjs";
@@ -27,7 +31,7 @@ import { vodClips } from "./signals/twitch.mjs";
 import { transcribeCandidates } from "./transcript.mjs";
 import { MEDIA, clock, parseArgs, parseClock, slugify } from "./util.mjs";
 
-const { flags, positional } = parseArgs(process.argv.slice(2), ["render", "discord", "allow-youtube"]);
+const { flags, positional } = parseArgs(process.argv.slice(2), ["render", "discord", "screen", "repeat", "allow-youtube"]);
 
 async function main() {
   const input = positional[0];
@@ -37,12 +41,12 @@ async function main() {
   const count = Number(flags.count ?? campaign.clipsPerVod);
   const started = Date.now();
 
-  console.log(`1/6 Getting the video`);
+  console.log(`1/7 Getting the video`);
   const job = await ingest(input, { from: parseClock(flags.from), to: parseClock(flags.to), allowYouTube: flags["allow-youtube"] === true });
   console.log(`  ${job.source.replace(MEDIA, "media/")}: ${clock(job.duration)}, ${job.width}x${job.height}`);
   if (!job.hasAudio) throw new Error("The video has no audio track.");
 
-  console.log(`2/6 Finding moments`);
+  console.log(`2/7 Finding moments`);
   const loud = loudness(job.source, job.window);
   const used = ["audio"];
   let chat = null;
@@ -61,38 +65,50 @@ async function main() {
   console.log(`  Signals: ${used.join(", ")}. ${list.length} candidate moments.`);
   writeFileSync(join(job.dir, "signals.json"), `${JSON.stringify({ used, buckets, candidates: list }, null, 2)}\n`);
 
-  console.log(`3/6 Transcribing the moments`);
+  console.log(`3/7 Transcribing the moments`);
   const how = await transcribeCandidates(job, list, { transcriptFile: flags.transcript, hint: [streamer.name, campaign.streamer, "GTA"].filter(Boolean).join(", ") });
   console.log(`  ${how}`);
 
-  console.log(`4/6 Ranking and writing hooks`);
+  console.log(`4/7 Ranking and writing hooks`);
   const picked = await pickClips(list, { campaign, streamer, count });
-  console.log(`  ${picked.clips.length} clips, ${picked.how}`);
+  console.log(`  ${picked.clips.length} worth posting, ${picked.how}`);
+  if (flags.repeat !== true) {
+    const made = alreadyClipped(campaign.id, job.vodId);
+    const before = picked.clips.length;
+    picked.clips = picked.clips.filter((p) => !made.some((m) => job.offset + p.start < m.to && job.offset + p.end > m.from));
+    if (picked.clips.length < before) console.log(`  Skipped ${before - picked.clips.length} already clipped for this campaign (--repeat to allow)`);
+  }
   const byId = new Map(list.map((c) => [c.id, c]));
-  const out = picked.clips.map((p, k) => {
-    const words = (byId.get(p.candidate).words ?? []).filter((w) => w.end > p.start && w.start < p.end);
-    return { rank: k + 1, ...p, words, file: `${String(k + 1).padStart(2, "0")}-${slugify(p.hook || `moment-at-${clock(job.offset + p.start)}`)}` };
+  const wordsIn = (p, { start, end } = p) => (byId.get(p.candidate).words ?? []).filter((w) => w.end > start && w.start < end);
+
+  console.log(`5/7 Checking frames`);
+  const { kept: chosen, dropped } = await checkFrames(job, picked.clips, { campaign, streamer, count, wordsIn });
+  await fixTrimmedHooks(job, chosen, { campaign, streamer, wordsIn });
+  const censor = censorFor(campaign);
+  const out = chosen.map((p, k) => {
+    const hook = censor(p.hook ?? "");
+    return { ...p, rank: k + 1, hook, words: wordsIn(p), file: `${String(k + 1).padStart(2, "0")}-${slugify(hook || `moment-at-${clock(job.offset + p.start)}`)}` };
   });
 
   if (flags.render !== false && out.length) {
-    console.log(`5/6 Rendering ${out.length} vertical clips`);
+    console.log(`6/7 Rendering ${out.length} vertical clips`);
     await renderClips(job, out, {
       campaign,
       streamer,
       onEach: (clip, seconds) => console.log(`  #${clip.rank} ${clip.file}.mp4 (${(clip.bytes / 1048576).toFixed(1)} MB, ${seconds} s)`),
     });
-  } else console.log("5/6 Rendering skipped");
+  } else console.log("6/7 Rendering skipped");
 
   for (const clip of out) {
     clip.lint = lintClip(clip, campaign);
     if (clip.video) writeFileSync(join(job.dir, "clips", `${clip.file}.txt`), `${clip.lint.caption}\n`);
   }
   const summary = out.map(({ words, ...c }) => ({ ...c, vodTime: job.offset + c.start, captionWords: words.length }));
-  writeFileSync(join(job.dir, "clips.json"), `${JSON.stringify({ input, campaign: campaign.id, streamer: streamer.id ?? null, how: picked.how, clips: summary }, null, 2)}\n`);
+  writeFileSync(join(job.dir, "clips.json"), `${JSON.stringify({ input, campaign: campaign.id, streamer: streamer.id ?? null, how: picked.how, clips: summary, dropped }, null, 2)}\n`);
   // One line per clip for the learning loop: which signals and hooks led to views.
-  for (const c of summary) appendFileSync(`${MEDIA}clips.jsonl`, `${JSON.stringify({ at: new Date().toISOString(), job: job.slug, campaign: campaign.id, rank: c.rank, file: c.file, hook: c.hook, score: c.score, seconds: c.end - c.start, vodTime: c.vodTime, signals: c.signals, ok: c.lint.ok })}\n`);
+  for (const c of summary) appendFileSync(`${MEDIA}clips.jsonl`, `${JSON.stringify({ at: new Date().toISOString(), job: job.slug, vod: job.vodId ?? null, rendered: Boolean(c.video), campaign: campaign.id, rank: c.rank, file: c.file, hook: c.hook, score: c.score, seconds: c.end - c.start, vodTime: c.vodTime, signals: c.signals, ok: c.lint.ok })}\n`);
 
-  console.log(`6/6 Notifying`);
+  console.log(`7/7 Notifying`);
   if (flags.discord === false) console.log("  Discord skipped");
   else if (!discordConfigured()) console.log("  No DISCORD_WEBHOOK_URL set, so no ping");
   else {
@@ -108,6 +124,101 @@ async function main() {
     for (const w of c.lint.warnings) console.log(`        ⚠ ${w}`);
   }
   if (out.some((c) => c.video)) console.log(`  Clips: media/${job.slug}/clips/`);
+}
+
+// Stretches of this VOD already clipped for this campaign (an earlier run, or the
+// overlap between follow chunks), so the same moment isn't made, and posted,
+// twice: Reach counts reposts as manipulation.
+function alreadyClipped(campaignId, vodId) {
+  const log = `${MEDIA}clips.jsonl`;
+  if (!vodId || !existsSync(log)) return [];
+  const rows = readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => {
+    try {
+      return JSON.parse(line);
+    } catch {
+      return null;
+    }
+  });
+  return rows
+    .filter((c) => c && c.campaign === campaignId && c.rendered !== false && (c.vod ?? c.job?.match(/^twitch-(\d+)/)?.[1]) === vodId)
+    .map((c) => ({ from: c.vodTime, to: c.vodTime + c.seconds }));
+}
+
+// Checks picks in rank order, a batch at a time, until `count` pass: trims menus,
+// black screens and rule problems off the ends, drops picks with too little
+// usable footage left, and marks IRL footage for the full-frame layout.
+async function checkFrames(job, picks, { campaign, streamer, count, wordsIn }) {
+  if (flags.screen === false || !claudeConfigured()) {
+    console.log(`  Skipped (${flags.screen === false ? "--no-screen" : "needs ANTHROPIC_API_KEY"})`);
+    return { kept: picks.slice(0, count), dropped: [] };
+  }
+  const kept = [];
+  const dropped = [];
+  let next = 0;
+  while (kept.length < count && next < picks.length) {
+    const batch = picks.slice(next, next + count - kept.length);
+    next += batch.length;
+    const results = await Promise.all(
+      batch.map((p) =>
+        screenClip(job, p, { campaign, streamer }).catch((err) => ({ keep: true, start: p.start, end: p.end, irl: false, trimmed: "", failed: err.message })),
+      ),
+    );
+    for (const [i, r] of results.entries()) {
+      const p = batch[i];
+      const label = `${clock(job.offset + p.start)} "${p.hook}"`;
+      if (!r.keep) {
+        console.log(`  Dropped ${label}: ${r.reason}`);
+        dropped.push({ vodTime: job.offset + p.start, start: p.start, end: p.end, hook: p.hook, score: p.score, reason: r.reason, frames: r.frames });
+        continue;
+      }
+      const cut = r.trimmed ? snapInward(r.start, r.end, wordsIn(p)) : { start: p.start, end: p.end };
+      if (cut.end - cut.start < campaign.minSeconds - 0.05) {
+        const reason = `under ${campaign.minSeconds} s once trimmed`;
+        console.log(`  Dropped ${label}: ${reason}`);
+        dropped.push({ vodTime: job.offset + p.start, start: p.start, end: p.end, hook: p.hook, score: p.score, reason, frames: r.frames });
+        continue;
+      }
+      const checkNotes = [];
+      if (r.failed) checkNotes.push(`frame check failed (${r.failed}), so look for menus and logos yourself`);
+      if (r.trimmed) checkNotes.push(`frame check ${r.trimmed}; make sure the hook still fits`);
+      kept.push({ ...p, ...cut, picked: { start: p.start, end: p.end }, irl: r.irl, trimmed: r.trimmed, checkNotes, frameNotes: r.notes ?? [] });
+      console.log(`  Kept ${label}${r.irl ? " (IRL: full-frame layout)" : ""}${r.trimmed ? `, ${r.trimmed}` : ""}${r.failed ? ` (check failed: ${r.failed})` : ""}`);
+    }
+  }
+  if (!picks.length) console.log("  Nothing to check: no moment here was worth posting for this campaign.");
+  else if (kept.length < count) console.log(`  ${kept.length} of ${count} clips passed; the rest of the picks didn't.`);
+  return { kept, dropped };
+}
+
+// A trimmed clip's hook may be about footage that was cut off: Claude checks each
+// against what's left and rewrites the ones that no longer fit. The review
+// warning stays only when the hook changed, or couldn't be checked.
+async function fixTrimmedHooks(job, clips, { campaign, streamer, wordsIn }) {
+  const trimmed = clips.filter((p) => p.trimmed && p.hook);
+  if (!trimmed.length || !claudeConfigured()) return;
+  const inPick = (p) => wordsIn(p, p.picked);
+  let fixes;
+  try {
+    fixes = await rehook(
+      trimmed.map((p) => ({ ...p, kept: wordsIn(p), cutOff: inPick(p).filter((w) => !(w.end > p.start && w.start < p.end)) })),
+      { campaign, streamer },
+    );
+  } catch (err) {
+    console.log(`  Couldn't check the hooks of trimmed clips (${err.message}), so check them yourself`);
+    return;
+  }
+  for (const [i, p] of trimmed.entries()) {
+    const fix = fixes[i];
+    const label = `${clock(job.offset + p.start)} "${p.hook}"`;
+    p.checkNotes = p.checkNotes.filter((n) => !n.endsWith("make sure the hook still fits"));
+    if (fix.fits) {
+      console.log(`  Hook still fits the trimmed clip: ${label}`);
+      continue;
+    }
+    console.log(`  Rewrote the hook of the trimmed clip ${label}: "${fix.hook}"`);
+    p.checkNotes.push(`frame check ${p.trimmed}, so the hook and caption were rewritten to fit (was "${p.hook}")`);
+    Object.assign(p, { originalHook: p.hook, hook: fix.hook, caption: fix.caption, why: fix.why });
+  }
 }
 
 main().catch((err) => {
