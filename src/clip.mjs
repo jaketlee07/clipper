@@ -21,7 +21,7 @@ import { loadCampaign, loadStreamer } from "./config.mjs";
 import { discordConfigured, notifyClipsReady } from "./discord.mjs";
 import { ingest } from "./ingest.mjs";
 import { lintClip } from "./lint.mjs";
-import { pickClips } from "./pick.mjs";
+import { pickClips, rehook } from "./pick.mjs";
 import { renderClips } from "./render.mjs";
 import { screenClip, snapInward } from "./screen.mjs";
 import { chatBuckets, readChat } from "./signals/chat.mjs";
@@ -79,10 +79,11 @@ async function main() {
     if (picked.clips.length < before) console.log(`  Skipped ${before - picked.clips.length} already clipped for this campaign (--repeat to allow)`);
   }
   const byId = new Map(list.map((c) => [c.id, c]));
-  const wordsIn = (p) => (byId.get(p.candidate).words ?? []).filter((w) => w.end > p.start && w.start < p.end);
+  const wordsIn = (p, { start, end } = p) => (byId.get(p.candidate).words ?? []).filter((w) => w.end > start && w.start < end);
 
   console.log(`5/7 Checking frames`);
   const { kept: chosen, dropped } = await checkFrames(job, picked.clips, { campaign, streamer, count, wordsIn });
+  await fixTrimmedHooks(job, chosen, { campaign, streamer, wordsIn });
   const censor = censorFor(campaign);
   const out = chosen.map((p, k) => {
     const hook = censor(p.hook ?? "");
@@ -180,13 +181,44 @@ async function checkFrames(job, picks, { campaign, streamer, count, wordsIn }) {
       const checkNotes = [];
       if (r.failed) checkNotes.push(`frame check failed (${r.failed}), so look for menus and logos yourself`);
       if (r.trimmed) checkNotes.push(`frame check ${r.trimmed}; make sure the hook still fits`);
-      kept.push({ ...p, ...cut, irl: r.irl, trimmed: r.trimmed, checkNotes, frameNotes: r.notes ?? [] });
+      kept.push({ ...p, ...cut, picked: { start: p.start, end: p.end }, irl: r.irl, trimmed: r.trimmed, checkNotes, frameNotes: r.notes ?? [] });
       console.log(`  Kept ${label}${r.irl ? " (IRL: full-frame layout)" : ""}${r.trimmed ? `, ${r.trimmed}` : ""}${r.failed ? ` (check failed: ${r.failed})` : ""}`);
     }
   }
   if (!picks.length) console.log("  Nothing to check: no moment here was worth posting for this campaign.");
   else if (kept.length < count) console.log(`  ${kept.length} of ${count} clips passed; the rest of the picks didn't.`);
   return { kept, dropped };
+}
+
+// A trimmed clip's hook may be about footage that was cut off: Claude checks each
+// against what's left and rewrites the ones that no longer fit. The review
+// warning stays only when the hook changed, or couldn't be checked.
+async function fixTrimmedHooks(job, clips, { campaign, streamer, wordsIn }) {
+  const trimmed = clips.filter((p) => p.trimmed && p.hook);
+  if (!trimmed.length || !claudeConfigured()) return;
+  const inPick = (p) => wordsIn(p, p.picked);
+  let fixes;
+  try {
+    fixes = await rehook(
+      trimmed.map((p) => ({ ...p, kept: wordsIn(p), cutOff: inPick(p).filter((w) => !(w.end > p.start && w.start < p.end)) })),
+      { campaign, streamer },
+    );
+  } catch (err) {
+    console.log(`  Couldn't check the hooks of trimmed clips (${err.message}), so check them yourself`);
+    return;
+  }
+  for (const [i, p] of trimmed.entries()) {
+    const fix = fixes[i];
+    const label = `${clock(job.offset + p.start)} "${p.hook}"`;
+    p.checkNotes = p.checkNotes.filter((n) => !n.endsWith("make sure the hook still fits"));
+    if (fix.fits) {
+      console.log(`  Hook still fits the trimmed clip: ${label}`);
+      continue;
+    }
+    console.log(`  Rewrote the hook of the trimmed clip ${label}: "${fix.hook}"`);
+    p.checkNotes.push(`frame check ${p.trimmed}, so the hook and caption were rewritten to fit (was "${p.hook}")`);
+    Object.assign(p, { originalHook: p.hook, hook: fix.hook, caption: fix.caption, why: fix.why });
+  }
 }
 
 main().catch((err) => {
